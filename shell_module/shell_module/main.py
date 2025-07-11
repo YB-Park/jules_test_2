@@ -4,8 +4,9 @@ from prompt_toolkit.history import FileHistory
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 from pathlib import Path
 
-from .session import ShellSession # Assuming ShellSession is in session.py
+from .session import ShellSession
 from . import constants
+from .styles import custom_style # Import the custom style
 
 async def interactive_shell_loop():
     """
@@ -25,7 +26,8 @@ async def interactive_shell_loop():
     # History file will be stored in user's home directory
     history_file = Path.home() / ".shell_module_history"
     pt_session = ToolkitPromptSession(
-        history=FileHistory(str(history_file))
+        history=FileHistory(str(history_file)),
+        style=custom_style # Apply the custom style
     )
 
     print("-" * 40)

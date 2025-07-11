@@ -11,11 +11,16 @@ import sys
 try:
     from shell_module.session import ShellSession
     from shell_module import constants
+    from shell_module.styles import custom_style # Import the style
 except ModuleNotFoundError:
     # Fallback for running script from parent directory (e.g., project root)
-    sys.path.insert(0, sys.path[0] + '/..') # Simple way to include parent for module resolution
+    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
     from shell_module.shell_module.session import ShellSession
     from shell_module.shell_module import constants
+    from shell_module.shell_module.styles import custom_style # Import the style
+
+# Ensure os is imported if not already, for sys.path.abspath
+import os
 
 
 async def automation_example():
@@ -70,7 +75,8 @@ async def automation_example():
 
     for cmd in commands:
         # Default typing_delay in run_command_for_automation is TYPING_EFFECT_DELAY / 1.5
-        stdout, stderr, code = await session.run_command_for_automation(cmd)
+        # Pass the custom_style to the method
+        stdout, stderr, code = await session.run_command_for_automation(cmd, style=custom_style)
 
         # Optional: print collected stdout/stderr if needed for logging,
         # though it's already printed line-by-line during streaming.
