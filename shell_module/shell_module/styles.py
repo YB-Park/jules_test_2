@@ -12,10 +12,13 @@ custom_style = Style.from_dict({
     'prompt_symbol_ps':   'ansimagenta bold',       # 'ansibrightmagenta' -> 'ansimagenta'
     'default':            'ansidefault',            # 그대로 유지
 
+    # Styles for automation UI messages (used in run_command_for_automation)
+    'info':               'ansibrightcyan',        # 정보 메시지 (진입/종료 등)
+    'command':            'ansibrightyellow',      # 타이핑되는 명령어
+    'separator':          'ansibrightblack',       # 구분선 (흐릿한 색으로)
+
     # Potentially for other UI elements if needed later
     # 'error_message': 'fg:ansired bg:ansiblack',
-    # 'info_message':  'fg:ansicyan',
-    # 'typing_effect_command': '#ansiyellow', # If command typing effect needs specific style
 })
 
 # You can also define multiple styles or themes if needed, e.g.:
