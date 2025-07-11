@@ -4,13 +4,13 @@ from prompt_toolkit.styles import Style
 # Colors can be specified by name (e.g., 'red', 'ansigreen') or hex codes (e.g., '#ff0000').
 # Attributes like 'bold', 'italic', 'underline' can also be used.
 custom_style = Style.from_dict({
-    # Prompt styles
-    'username':           '#ansibrightgreen bold',   # Bright Green, Bold (e.g., for user part)
-    'hostname':           '#ansibrightcyan bold',    # Bright Cyan, Bold (e.g., for host part)
-    'path':               '#ansibrightblue bold',    # Bright Blue, Bold (e.g., for current directory)
-    'prompt_symbol':      '#ansibrightwhite bold',   # Bright White, Bold (e.g., $, > symbols)
-    'prompt_symbol_ps':   '#ansibrightmagenta bold', # Bright Magenta, Bold (e.g., "PS" in PowerShell)
-    'default':            '#ansidefault',            # Default terminal color (for @, : etc.)
+    # Prompt styles - Using more basic/standard ANSI names
+    'username':           'ansigreen bold',         # 'ansibrightgreen' -> 'ansigreen'
+    'hostname':           'ansicyan bold',          # 'ansibrightcyan' -> 'ansicyan'
+    'path':               'ansiblue bold',          # 'ansibrightblue' -> 'ansiblue'
+    'prompt_symbol':      'ansiwhite bold',         # 'ansibrightwhite' -> 'ansiwhite'
+    'prompt_symbol_ps':   'ansimagenta bold',       # 'ansibrightmagenta' -> 'ansimagenta'
+    'default':            'ansidefault',            # 그대로 유지
 
     # Potentially for other UI elements if needed later
     # 'error_message': 'fg:ansired bg:ansiblack',
