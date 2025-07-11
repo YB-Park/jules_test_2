@@ -254,6 +254,32 @@ class ShellSession:
         # Better: keep the last known CWD if update fails, or handle error.
         # For now, if output_lines is empty, it means we didn't get a new CWD from shell.
 
+    async def run_command_for_automation(self, command: str, typing_delay: float = None) -> tuple[str, str, int]:
+        """
+        Runs a command as if an automated system is typing it.
+        Displays prompt, types command, then executes and streams output.
+        Args:
+            command (str): The command string to execute.
+            typing_delay (float, optional): Delay between typing characters.
+                                            Defaults to constants.TYPING_EFFECT_DELAY / 2.
+        Returns:
+            tuple[str, str, int]: Full stdout, full stderr, and return code from execute_command.
+        """
+        if typing_delay is None:
+            typing_delay = constants.TYPING_EFFECT_DELAY / 1.5 # Slightly faster for automation
+
+        current_prompt = await self.get_prompt()
+        print(current_prompt, end="", flush=True)
+
+        for char_to_type in command:
+            print(char_to_type, end="", flush=True)
+            if char_to_type != ' ': # Optionally skip delay for spaces
+                await asyncio.sleep(typing_delay)
+        print()  # Newline after typing the command
+
+        # Execute the command (streams output internally)
+        return await self.execute_command(command)
+
     async def get_prompt(self) -> str:
         """
         Generates the prompt string based on OS, shell type, username, hostname, and CWD.
