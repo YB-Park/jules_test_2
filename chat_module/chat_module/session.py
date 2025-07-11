@@ -4,13 +4,17 @@ from prompt_toolkit.keys import Keys
 from prompt_toolkit.filters import HasFocus, Condition
 import asyncio
 
-from .utils import get_dummy_response
+# No longer importing from utils as get_dummy_response is removed
+# from .utils import get_dummy_response
+from .dummy_copilot_tool_agent_sse import _CopilotToolAgentSSE
 
 class ChatSession:
     def __init__(self):
         self.turn_count = 0
         self.prompt_session = PromptSession(multiline=True)
         self.running = True
+        # Initialize the dummy agent
+        self.agent = _CopilotToolAgentSSE(some_string="CLI Agent Initialized")
 
     async def get_user_input(self):
         """
@@ -45,9 +49,9 @@ class ChatSession:
 
         try:
             text = await self.prompt_session.prompt_async(
-                "You: ",
+                "> ",  # Changed prompt
                 key_bindings=bindings,
-                prompt_continuation="... " # For lines after the first
+                prompt_continuation="  "  # Changed continuation to two spaces
             )
             return text
         except EOFError: # This handles Ctrl+D on an empty line if not caught by binding
@@ -90,8 +94,11 @@ class ChatSession:
                     continue
 
                 self.turn_count += 1
-                bot_response = get_dummy_response(self.turn_count, user_input)
-                print(f"Bot: {bot_response}")
+                # Call the agent's ask method directly
+                agent_response = self.agent.ask(user_input)
+                # Print the raw response from the agent, prefixed with "Bot: "
+                # Timestamp and turn count are removed for now, focusing on agent's direct output.
+                print(f"Bot: {agent_response}")
 
             except Exception as e:
                 print(f"An unexpected error occurred: {e}")

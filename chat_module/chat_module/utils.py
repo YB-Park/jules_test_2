@@ -1,8 +1,10 @@
+# This file can be used for utility functions if needed in the future.
+# For now, it's empty as get_dummy_response has been moved to the agent.
 import datetime
 
-def get_dummy_response(turn_count: int, user_input: str) -> str:
-    """
-    Generates a dummy response including the current time, turn count, and echoes the user input.
-    """
-    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    return f"[Bot - {turn_count}번째 대화 - {now}]: 당신의 입력: \"{user_input}\""
+# If other utility functions are needed later, they can be added here.
+# For example, a more complex formatter for bot messages if the agent's
+# response needs consistent decoration across different agent types.
+# def format_bot_message_for_cli(turn_count: int, raw_agent_response: str) -> str:
+# now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+# return f"[Bot - Turn {turn_count} - {now}]: {raw_agent_response}"
