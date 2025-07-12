@@ -45,7 +45,8 @@ async def automation_example():
 
     for cmd in commands:
         stdout, stderr, code = await session.run_command_for_automation(cmd, style=custom_style)
-        await asyncio.sleep(1)
+        # Reduced sleep time to better gauge command execution speed
+        await asyncio.sleep(0.5)
 
     print("-" * 50)
     print("[INFO] Automated command sequence finished.")
