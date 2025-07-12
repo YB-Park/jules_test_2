@@ -61,10 +61,12 @@ class BashSession(Session):
         }
 
         output_ended = False
-        while not output_ended:
+        while not output_ended and tasks: # Check if tasks is not empty
             done, pending = await asyncio.wait(tasks.keys(), return_when=asyncio.FIRST_COMPLETED, timeout=5.0)
 
             if not done: # Timeout
+                for task in pending: task.cancel()
+                tasks.clear()
                 break
 
             for task in done:
