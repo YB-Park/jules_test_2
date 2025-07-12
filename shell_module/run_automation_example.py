@@ -1,21 +1,22 @@
 import asyncio
 import sys
 import os
-from shell_module.session import ShellSession
+from shell_module.session import create_shell_session # Import the factory
 from shell_module import constants
 from shell_module.styles import custom_style
 
 async def automation_example():
-    session = ShellSession()
     print("-" * 50)
-    print("[INFO] Shell session created.")
-    print(f"[INFO] Target OS: {session.os_type}")
+    print("[INFO] Attempting to create shell session for this OS...")
+    session = await create_shell_session()
+
+    if not session:
+        print("[FATAL] Could not create a shell session. Exiting.")
+        return
+
+    print(f"[INFO] Shell session created successfully. Type: {session.shell_type}")
     print("-" * 50)
 
-    # This is the line to be added as per user request
-    await session._initialize_shell()
-
-    print("-" * 50)
     print("[INFO] Starting automated command sequence...")
     print("Each command will be 'typed out' after its prompt.")
     print("Output will be streamed.")
@@ -23,25 +24,21 @@ async def automation_example():
     await asyncio.sleep(1)
 
     commands = []
-    if session.os_type == "windows":
+    if session.is_windows:
         commands = [
             "echo 'Hello from Windows Automation! 한글 테스트'",
-            "dir /ad",
+            "dir",
             "cd ..",
             "echo 'Current directory should be parent.'",
             "cd",
-            "timeout /t 2 /nobreak > nul",
-            "echo 'Automation sequence complete.'"
         ]
     else: # Linux/macOS
         commands = [
             "echo 'Hello from Linux/macOS Automation!'",
-            "ls -a",
+            "ls -la",
             "cd ..",
             "echo 'Current directory should be parent.'",
             "pwd",
-            "sleep 2",
-            "echo 'Automation sequence complete.'"
         ]
 
     commands.append("non_existent_command_test_12345")
@@ -52,6 +49,7 @@ async def automation_example():
 
     print("-" * 50)
     print("[INFO] Automated command sequence finished.")
+    await session.close() # Close the session at the end
     print("-" * 50)
 
 if __name__ == "__main__":
