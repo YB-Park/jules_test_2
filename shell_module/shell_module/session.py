@@ -9,13 +9,13 @@ from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit import print_formatted_text
 from prompt_toolkit.styles import Style
 
-PROMPT_MARKER = "_#_#_PROMPT_#_#_>"
+PROMPT_MARKER = "__PROMPT_END_MARKER__>"
 
 class ShellSession:
     def __init__(self):
         self.process = None
         self.shell_type = None
-        self.current_working_directory = "~"
+        self.current_working_directory = os.getcwd() # Start with Python's CWD
         self.username = getpass.getuser()
         self.hostname = socket.gethostname()
         self.os_type = constants.OS_TYPE
@@ -40,24 +40,40 @@ class ShellSession:
                 else: raise FileNotFoundError
             except Exception:
                 self.shell_type = "cmd"
-                prompt_cmd = f"prompt {PROMPT_MARKER}"
+                prompt_cmd = f"prompt {PROMPT_MARKER.replace('>', '$G')}" # For CMD, > is special
                 shell_cmd_list = [constants.DEFAULT_SHELL_WINDOWS_CMD, "/K", f"chcp 65001 & {prompt_cmd}"]
-        else:
+        else: # Linux/macOS
             default_shell = constants.DEFAULT_SHELL_LINUX
             env_shell = os.environ.get("SHELL", default_shell)
-            self.shell_type = os.path.basename(env_shell)
             resolved_shell_path = shutil.which(env_shell) or shutil.which(default_shell)
-            if not resolved_shell_path: raise FileNotFoundError("Could not find a valid shell.")
-            shell_cmd_list = [resolved_shell_path, "-c", f"export PS1='{PROMPT_MARKER}'; exec {resolved_shell_path} -i"]
+            if not resolved_shell_path:
+                print(f"[ERROR] Could not find a valid shell executable. Tried: {env_shell}, {default_shell}")
+                self.process = None
+                return
+            self.shell_type = os.path.basename(resolved_shell_path)
+            # Using -i for interactive mode is crucial for some shells to behave as expected
+            shell_cmd_list = [resolved_shell_path, "-i"]
 
-        self.process = await asyncio.create_subprocess_exec(
-            *shell_cmd_list, stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        try:
+            self.process = await asyncio.create_subprocess_exec(
+                *shell_cmd_list, stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+
+            # For non-Windows, set the prompt using an initial command
+            if not self.is_windows:
+                 self.process.stdin.write(f"export PS1='{PROMPT_MARKER}'\n".encode('utf-8'))
+                 await self.process.stdin.drain()
+
+        except Exception as e:
+            print(f"[ERROR] Failed to start shell process: {e}")
+            self.process = None # Ensure process is None on failure
+            return
 
         await self._read_until_prompt() # Consume startup messages
         await self._update_cwd() # Set initial CWD
 
     async def _read_until_prompt(self):
+        if not self.process: return ""
         output_buffer = ""
         while True:
             try:
@@ -65,35 +81,58 @@ class ShellSession:
                 if not char_bytes: break
                 char = char_bytes.decode('utf-8', errors='replace')
                 output_buffer += char
+                # Use endswith which is more reliable for single-char reads
                 if output_buffer.endswith(PROMPT_MARKER):
                     return output_buffer[:-len(PROMPT_MARKER)]
-            except asyncio.TimeoutError: break
+            except asyncio.TimeoutError:
+                # This can happen if a command has no output. It's not necessarily an error.
+                break
             except Exception: break
         return output_buffer
 
     async def _update_cwd(self):
+        if not self.process or self.process.returncode is not None: return
+
         cwd_cmd = "$PWD.Path" if self.shell_type == "powershell" else ("cd" if self.is_windows else "pwd")
         self.process.stdin.write(f"{cwd_cmd}\n".encode('utf-8'))
         await self.process.stdin.drain()
+
         output = await self._read_until_prompt()
         lines = [line.strip() for line in output.splitlines() if line.strip()]
-        if lines and lines[0].lower() == cwd_cmd.lower(): lines = lines[1:]
-        if lines: self.current_working_directory = lines[-1]
+
+        # Filter out the command echo if it appears
+        if lines and lines[0].lower().startswith(cwd_cmd.lower()):
+            lines = lines[1:]
+
+        if lines:
+            self.current_working_directory = lines[-1]
 
     async def _get_return_code(self):
+        if not self.process or self.process.returncode is not None: return -1
+
         rc_cmd = "$LASTEXITCODE" if self.shell_type == "powershell" else ("echo %errorlevel%" if self.is_windows else "echo $?")
         self.process.stdin.write(f"{rc_cmd}\n".encode('utf-8'))
         await self.process.stdin.drain()
+
         output = await self._read_until_prompt()
         lines = [line.strip() for line in output.splitlines() if line.strip()]
-        if lines and lines[0].lower() == rc_cmd.lower(): lines = lines[1:]
-        try: return int(lines[-1]) if lines else -1
-        except (ValueError, IndexError): return -1
+
+        if lines and lines[0].lower().startswith(rc_cmd.lower()):
+            lines = lines[1:]
+
+        try:
+            return int(lines[-1]) if lines else -1
+        except (ValueError, IndexError):
+            return -1
 
     async def execute_command(self, command: str) -> tuple[str, str, int]:
+        if not self.process or self.process.returncode is not None: return "", "Shell not running.", -1
+
         if not command.strip():
+            # For empty command, just get RC and update CWD
+            rc = await self._get_return_code()
             await self._update_cwd()
-            return "", "", 0
+            return "", "", rc
 
         self.process.stdin.write(f"{command}\n".encode('utf-8'))
         await self.process.stdin.drain()
@@ -101,7 +140,8 @@ class ShellSession:
         stdout = await self._read_until_prompt()
 
         lines = stdout.splitlines()
-        # In interactive mode, the first line is often the command echo
+        # In interactive mode, the first line is often the command echo.
+        # Check if the first line of output is the command itself.
         if lines and lines[0].strip() == command.strip():
             stdout = "\n".join(lines[1:])
 
@@ -110,7 +150,7 @@ class ShellSession:
         return_code = await self._get_return_code()
         await self._update_cwd()
 
-        return stdout, "", return_code
+        return stdout, "", return_code # Stderr not separated in this model
 
     async def get_prompt(self) -> FormattedText:
         # (Same as previous version)
@@ -130,6 +170,10 @@ class ShellSession:
         return FormattedText(prompt_parts)
 
     async def run_command_for_automation(self, command: str, typing_delay: float = None, style: Style = None) -> tuple[str, str, int]:
+        if not self.process:
+            print("[ERROR] Shell is not initialized. Cannot run command.")
+            return "", "Shell not initialized.", -1
+
         active_style = style if style else self._internal_style
         if typing_delay is None: typing_delay = constants.TYPING_EFFECT_DELAY / 1.5
 
