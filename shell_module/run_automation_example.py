@@ -30,15 +30,14 @@ async def automation_example():
     """
     session = ShellSession()
     print("-" * 50)
-    print("[INFO] Initializing shell for automation example...")
+    print("[INFO] Shell session created (stateless mode).")
     print(f"[INFO] Target OS: {session.os_type}")
     print("-" * 50)
 
-    await session._initialize_shell()
-
-    if not session.process or session.process.returncode is not None:
-        print("[ERROR] Shell process failed to initialize. Exiting.")
-        return
+    # No longer need to initialize or check for a persistent process
+    # if not session.process or session.process.returncode is not None:
+    #     print("[ERROR] Shell process failed to initialize. Exiting.")
+    #     return
 
     print("-" * 50)
     print("[INFO] Starting automated command sequence...")
@@ -85,8 +84,8 @@ async def automation_example():
 
     print("-" * 50)
     print("[INFO] Automated command sequence finished.")
-    await session.close()
-    print("[INFO] Shell session closed.")
+    # No longer need to close a persistent session
+    # await session.close()
     print("-" * 50)
 
 if __name__ == "__main__":
