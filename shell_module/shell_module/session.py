@@ -62,18 +62,26 @@ class ShellSession:
         # Clear startup messages and get initial CWD
         await self._update_cwd()
 
-    async def _read_until_marker(self, end_marker, timeout=2.0):
+    async def _read_until_marker(self, end_marker, timeout=2.0, print_output=False):
         output_buffer = ""
         while True:
             try:
                 line_bytes = await asyncio.wait_for(self.process.stdout.readline(), timeout=timeout)
                 if not line_bytes: break
                 line = line_bytes.decode('utf-8', errors='replace')
+
+                # Check for marker before printing
                 if end_marker in line:
-                    # Capture content on the same line before the marker
                     output_buffer += line.split(end_marker, 1)[0]
                     break
+
                 output_buffer += line
+
+                # Print output only if flag is set
+                if print_output:
+                    # We print the raw line with its original ending to preserve formatting
+                    print(line.rstrip('\r\n'))
+
             except asyncio.TimeoutError: break
             except Exception: break
         return output_buffer
@@ -87,12 +95,20 @@ class ShellSession:
         if self.shell_type == "powershell": cwd_cmd = "$PWD.Path"
 
         cmd_block = f"{cwd_cmd}\necho {end_marker}\n"
+        if self.shell_type == "powershell":
+            # Use Write-Host to avoid redirection issues and ensure clean output
+            cmd_block = f"Write-Host -NoNewline \"$({cwd_cmd})\"; echo \"{end_marker}\""
+        elif self.shell_type == "cmd":
+            # Use parentheses to group commands and avoid issues with echo and redirection
+            cmd_block = f"({cwd_cmd} & echo {end_marker})"
+
         newline = b"\r\n" if self.os_type == "windows" else b"\n"
 
         self.process.stdin.write(cmd_block.encode('utf-8') + newline)
         await self.process.stdin.drain()
 
-        full_output = await self._read_until_marker(end_marker)
+        # Call with print_output=False to run silently
+        full_output = await self._read_until_marker(end_marker, print_output=False)
 
         # The last non-empty line of the output should be the CWD
         lines = [line.strip() for line in full_output.splitlines() if line.strip()]
@@ -110,13 +126,19 @@ class ShellSession:
         rc_cmd = "echo $?" if self.os_type in ["linux", "macos"] else "echo %errorlevel%"
         if self.shell_type == "powershell": rc_cmd = "echo $LASTEXITCODE"
 
-        cmd_block = f"{command}\n{rc_cmd}\necho {end_marker}\n"
+        # Construct command block more carefully for Windows
+        if self.os_type == "windows":
+            cmd_block = f"({command}) & echo {rc_cmd} & echo {end_marker}"
+        else:
+            cmd_block = f"{command}; {rc_cmd}; echo {end_marker}"
+
         newline = b"\r\n" if self.os_type == "windows" else b"\n"
 
         self.process.stdin.write(cmd_block.encode('utf-8') + newline)
         await self.process.stdin.drain()
 
-        full_output = await self._read_until_marker(end_marker, timeout=10.0) # Longer timeout for commands
+        # Call with print_output=True to stream results to console
+        full_output = await self._read_until_marker(end_marker, timeout=10.0, print_output=print_output)
 
         # Process the collected output
         lines = [line for line in full_output.splitlines()]
