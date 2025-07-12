@@ -9,8 +9,6 @@ from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit import print_formatted_text
 from prompt_toolkit.styles import Style
 
-PROMPT_MARKER = "__PROMPT_END_MARKER__>"
-
 class ShellSession:
     def __init__(self):
         self.process = None
@@ -22,13 +20,13 @@ class ShellSession:
         self._running = True
         self.is_windows = self.os_type == "windows"
         self._internal_style = Style.from_dict({
-            'info': 'fg:ansicyan', 'command': 'fg:ansiyellow', 'separator': 'fg:ansibrightblack',
+            'info': 'fg:ansicyan',
+            'command': 'fg:ansiyellow',
+            'separator': 'fg:ansibrightblack',
         })
 
     async def _initialize_shell(self):
         shell_cmd_list = []
-        initial_setup_cmds = []
-
         if self.is_windows:
             try:
                 proc_check = await asyncio.create_subprocess_shell(
@@ -37,96 +35,81 @@ class ShellSession:
                 await proc_check.communicate()
                 if proc_check.returncode == 0:
                     self.shell_type = "powershell"
-                    shell_cmd_list = [constants.DEFAULT_SHELL_WINDOWS_POWERSHELL, "-NoExit", "-NoLogo", "-NonInteractive"]
-                    prompt_cmd = f"function prompt {{'{PROMPT_MARKER}'}}"
-                    initial_setup_cmds = [f"chcp 65001 | Out-Null", prompt_cmd]
+                    shell_cmd_list = [constants.DEFAULT_SHELL_WINDOWS_POWERSHELL, "-NoExit", "-NoLogo", "-NonInteractive", "-Command", "chcp 65001 | Out-Null; $OutputEncoding = [System.Text.UTF8Encoding]::new()"]
                 else: raise FileNotFoundError
             except Exception:
                 self.shell_type = "cmd"
-                shell_cmd_list = [constants.DEFAULT_SHELL_WINDOWS_CMD, "/K"]
-                prompt_cmd = f"prompt {PROMPT_MARKER.replace('>', '$G')}"
-                initial_setup_cmds = ["chcp 65001", prompt_cmd]
-        else: # Linux/macOS
+                shell_cmd_list = [constants.DEFAULT_SHELL_WINDOWS_CMD, "/K", "chcp 65001"]
+        else:
             default_shell = constants.DEFAULT_SHELL_LINUX
             env_shell = os.environ.get("SHELL", default_shell)
+            self.shell_type = os.path.basename(env_shell)
             resolved_shell_path = shutil.which(env_shell) or shutil.which(default_shell)
-            if not resolved_shell_path:
-                print(f"[ERROR] Could not find a valid shell executable. Tried: {env_shell}, {default_shell}")
-                self.process = None; return
-            self.shell_type = os.path.basename(resolved_shell_path)
+            if not resolved_shell_path: raise FileNotFoundError("Could not find a valid shell.")
             shell_cmd_list = [resolved_shell_path, "-i"]
-            initial_setup_cmds = [f"export PS1='{PROMPT_MARKER}'"]
 
         try:
             self.process = await asyncio.create_subprocess_exec(
                 *shell_cmd_list, stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         except Exception as e:
-            print(f"[DEBUG] Error during create_subprocess_exec: {e}")
-            self.process = None; return
-
-        # Send initial setup commands
-        for cmd in initial_setup_cmds:
-            self.process.stdin.write(f"{cmd}\n".encode('utf-8'))
-            await self.process.stdin.drain()
-
-        await self._read_until_prompt() # Consume startup and setup command messages
+            if self.os_type == "windows" and "powershell" in shell_cmd_list[0]:
+                self.shell_type = "cmd"
+                shell_cmd_list = [constants.DEFAULT_SHELL_WINDOWS_CMD, "/K", "chcp 65001"]
+                self.process = await asyncio.create_subprocess_exec(
+                    *shell_cmd_list, stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            else: raise
         await self._update_cwd()
-
-    async def _read_until_prompt(self):
-        if not self.process: return ""
-        output_buffer = ""
-        while True:
-            try:
-                char_bytes = await asyncio.wait_for(self.process.stdout.read(1), timeout=2.0)
-                if not char_bytes: break
-                char = char_bytes.decode('utf-8', errors='replace')
-                output_buffer += char
-                if output_buffer.endswith(PROMPT_MARKER):
-                    return output_buffer[:-len(PROMPT_MARKER)]
-            except asyncio.TimeoutError: break
-            except Exception as e:
-                print(f"[DEBUG] Error in _read_until_prompt: {e}")
-                break
-        return output_buffer
 
     async def _update_cwd(self):
         if not self.process or self.process.returncode is not None: return
         cwd_cmd = "$PWD.Path" if self.shell_type == "powershell" else ("cd" if self.is_windows else "pwd")
-        self.process.stdin.write(f"{cwd_cmd}\n".encode('utf-8'))
+        end_marker = "__END_OF_CWD_UPDATE__"
+        cmd_block = f"Write-Host -NoNewline \"$({cwd_cmd})\"; echo \"{end_marker}\"" if self.shell_type == "powershell" else f"({cwd_cmd} & echo {end_marker})" if self.shell_type == "cmd" else f"{cwd_cmd}; echo {end_marker}"
+        newline = b"\r\n" if self.is_windows else b"\n"
+        self.process.stdin.write(cmd_block.encode('utf-8') + newline)
         await self.process.stdin.drain()
-        output = await self._read_until_prompt()
-        lines = [line.strip() for line in output.splitlines() if line.strip()]
-        if lines and lines[0].lower().startswith(cwd_cmd.lower()): lines = lines[1:]
+        full_output = await self._read_until_marker(end_marker, print_output=False)
+        lines = [line.strip() for line in full_output.splitlines() if line.strip()]
+        if lines and lines[0].lower() == cwd_cmd.lower(): lines = lines[1:]
         if lines: self.current_working_directory = lines[-1]
 
-    async def _get_return_code(self):
-        if not self.process or self.process.returncode is not None: return -1
-        rc_cmd = "$LASTEXITCODE" if self.shell_type == "powershell" else ("echo %errorlevel%" if self.is_windows else "echo $?")
-        self.process.stdin.write(f"{rc_cmd}\n".encode('utf-8'))
-        await self.process.stdin.drain()
-        output = await self._read_until_prompt()
-        lines = [line.strip() for line in output.splitlines() if line.strip()]
-        if lines and lines[0].lower().startswith(rc_cmd.lower()): lines = lines[1:]
-        try: return int(lines[-1]) if lines else -1
-        except (ValueError, IndexError): return -1
+    async def _read_until_marker(self, end_marker, timeout=2.0, print_output=False):
+        output_buffer = ""
+        while True:
+            try:
+                line_bytes = await asyncio.wait_for(self.process.stdout.readline(), timeout=timeout)
+                if not line_bytes: break
+                line = line_bytes.decode('utf-8', errors='replace')
+                if end_marker in line:
+                    output_buffer += line.split(end_marker, 1)[0]
+                    break
+                output_buffer += line
+                if print_output: print(line.rstrip('\r\n'))
+            except asyncio.TimeoutError: break
+            except Exception: break
+        return output_buffer
 
-    async def execute_command(self, command: str) -> tuple[str, str, int]:
+    async def execute_command(self, command: str, print_output=True) -> tuple[str, str, int]:
         if not self.process or self.process.returncode is not None: return "", "Shell not running.", -1
-        if not command.strip():
-            return "", "", await self._get_return_code()
-
-        self.process.stdin.write(f"{command}\n".encode('utf-8'))
+        end_marker = "__END_OF_CMD_EXEC__"
+        rc_cmd = "$LASTEXITCODE" if self.shell_type == "powershell" else ("echo %errorlevel%" if self.is_windows else "echo $?")
+        cmd_block = f"({command}) & echo {rc_cmd} & echo {end_marker}" if self.is_windows else f"{command}; {rc_cmd}; echo {end_marker}"
+        newline = b"\r\n" if self.is_windows else b"\n"
+        self.process.stdin.write(cmd_block.encode('utf-8') + newline)
         await self.process.stdin.drain()
-        stdout = await self._read_until_prompt()
-        lines = stdout.splitlines()
-        if lines and lines[0].strip() == command.strip():
-            stdout = "\n".join(lines[1:])
-        print(stdout)
-        return stdout, "", await self._get_return_code()
+        full_output = await self._read_until_marker(end_marker, timeout=10.0, print_output=print_output)
+        lines = [line for line in full_output.splitlines()]
+        rc_str = "-1"
+        if lines:
+            if lines[-1].strip().isdigit(): rc_str = lines.pop(-1).strip()
+        stdout = "\n".join(lines)
+        try: return_code = int(rc_str)
+        except ValueError: return_code = -1
+        return stdout, "", return_code # Stderr not separated
 
     async def get_prompt(self) -> FormattedText:
-        # (Same as previous version)
         home_dir = os.path.expanduser("~"); display_cwd = self.current_working_directory; prompt_parts = []
         if not self.is_windows:
             normalized_cwd = os.path.normpath(self.current_working_directory)
@@ -143,10 +126,7 @@ class ShellSession:
         return FormattedText(prompt_parts)
 
     async def run_command_for_automation(self, command: str, typing_delay: float = None, style: Style = None) -> tuple[str, str, int]:
-        if not self.process:
-            print("[ERROR] Shell is not initialized. Cannot run command.")
-            return "", "Shell not initialized.", -1
-
+        if not self.process: return "", "Shell not initialized.", -1
         active_style = style if style else self._internal_style
         if typing_delay is None: typing_delay = constants.TYPING_EFFECT_DELAY / 1.5
 
@@ -167,7 +147,7 @@ class ShellSession:
             await asyncio.sleep(typing_delay if char_to_type not in [' ', '\t'] else 0)
         print()
 
-        stdout, stderr, return_code = await self.execute_command(command)
+        stdout, stderr, return_code = await self.execute_command(command, print_output=True)
 
         exit_message_parts = [('class:info', f"명령어 실행 완료 (종료 코드: {return_code}). 쉘 환경 종료 중...")]
         exit_message_ft = FormattedText(exit_message_parts)
