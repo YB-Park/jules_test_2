@@ -50,16 +50,14 @@ async def automation_example():
     commands = []
     if session.os_type == "windows":
         commands = [
-            "echo Hello from Windows Automation!",
+            "echo 'Hello from Windows Automation! 한글 테스트'", # Use single quotes
             "dir /ad", # List directories
             "cd ..",
-            "echo Current directory should be parent.",
-            "cd", # Print current directory (for cmd) or use $PWD.Path (for PS, handled by _update_cwd)
+            "echo 'Current directory should be parent.'", # Use single quotes
+            "cd", # Print current directory
             "timeout /t 2 /nobreak > nul", # Sleep for 2 seconds
-            "echo Automation sequence complete."
+            "echo 'Automation sequence complete.'" # Use single quotes
         ]
-        # For PowerShell, 'pwd' or '$PWD.Path' is better for CWD, but 'cd' also works to display.
-        # Our _update_cwd uses the correct method.
     else: # Linux/macOS
         commands = [
             "echo 'Hello from Linux/macOS Automation!'",
@@ -101,15 +99,12 @@ if __name__ == "__main__":
     # If you are in project_root/shell_module and run `python run_automation_example.py`
     # the direct imports should work.
 
-    loop = asyncio.get_event_loop()
+    # Modern and simpler way to run asyncio main function, avoids DeprecationWarning.
     try:
-        loop.run_until_complete(automation_example())
+        asyncio.run(automation_example())
     except KeyboardInterrupt:
         print("\n[INFO] Automation example interrupted by user.")
+    except Exception as e:
+        print(f"\n[ERROR] An unexpected error occurred in main: {e}")
     finally:
-        # Ensure all tasks are cancelled before closing the loop, if any are left.
-        # This is more critical for complex asyncio apps.
-        # For this script, run_until_complete should handle it.
-        if loop.is_running():
-            loop.close() # This might not be needed if run_until_complete exits cleanly
-        print("[INFO] Event loop closed.")
+        print("[INFO] Script finished.")
