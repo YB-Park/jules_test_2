@@ -1,123 +1,70 @@
 import asyncio
-import platform
 import os
 import getpass
 import socket
 import shutil
 import sys
-from . import constants
-from prompt_toolkit.formatted_text import FormattedText
-from prompt_toolkit import print_formatted_text
-from prompt_toolkit.styles import Style
+from abc import ABC, abstractmethod
+from . import constants # typing_delay might be used
 
-PROMPT_MARKER = "__PROMPT_END_MARKER__>"
+PROMPT_MARKER = "___PROMPT_MARKER___"
 
-class BaseShellSession:
-    def __init__(self):
-        self.process = None; self.shell_type = "base"; self.current_working_directory = os.getcwd()
-        self.username = getpass.getuser(); self.hostname = socket.gethostname()
-        self.os_type = constants.OS_TYPE; self.is_windows = self.os_type == "windows"
-        self._internal_style = Style.from_dict({'info': 'fg:ansicyan', 'command': 'fg:ansiyellow', 'separator': 'fg:ansibrightblack'})
-    async def _initialize_shell(self): raise NotImplementedError
-    async def execute_command(self, command: str) -> tuple[str, str, int]: raise NotImplementedError
-    async def get_prompt(self) -> FormattedText: raise NotImplementedError
-    async def run_command_for_automation(self, command: str, typing_delay: float = None, style: Style = None) -> tuple[str, str, int]:
-        if not self.process: print("[ERROR] Shell not initialized."); return "", "Shell not initialized.", -1
-        active_style = style or self._internal_style
-        if typing_delay is None: typing_delay = constants.TYPING_EFFECT_DELAY / 1.5
-        separator_ft = FormattedText([('class:separator', f"\n{'-'*70}")])
-        entry_message_ft = FormattedText([('class:info', "쉘 환경 진입 중... (명령어: "), ('class:command', command), ('class:info', ")")])
-        print_formatted_text(separator_ft, style=active_style); print_formatted_text(entry_message_ft, style=active_style)
-        current_prompt_ft = await self.get_prompt()
-        print_formatted_text(current_prompt_ft, style=active_style, end="")
-        for char in command:
-            print_formatted_text(FormattedText([('class:command', char)]), style=active_style, end="")
-            await asyncio.sleep(typing_delay if char > ' ' else 0)
-        print()
-        stdout, stderr, rc = await self.execute_command(command)
-        exit_message_ft = FormattedText([('class:info', f"명령어 실행 완료 (종료 코드: {rc}). 쉘 환경 종료 중...")])
-        print_formatted_text(exit_message_ft, style=active_style); print_formatted_text(separator_ft, style=active_style)
-        return stdout, stderr, rc
+class Session(ABC):
+    @abstractmethod
+    async def execute(self, command: str, print_output: bool = True) -> str:
+        pass
+
+    @abstractmethod
+    async def get_display_prompt(self) -> str:
+        pass
+
+    @abstractmethod
+    async def initialize(self):
+        pass
+
+    @abstractmethod
     async def close(self):
-        if self.process and self.process.returncode is None:
-            try:
-                if self.is_windows: self.process.stdin.write(b"exit\r\n")
-                else: self.process.stdin.write(b"exit\n")
-                await self.process.stdin.drain()
-                self.process.terminate()
-                await asyncio.wait_for(self.process.wait(), timeout=1.0)
-            except Exception:
-                try: self.process.kill()
-                except Exception: pass
-            finally: self.process = None
+        pass
 
-class PowerShellSession(BaseShellSession):
-    def __init__(self): super().__init__(); self.shell_type = "powershell"
-    async def _initialize_shell(self):
-        prompt_cmd = f"function prompt {{'{PROMPT_MARKER}'}}"
-        shell_cmd_list = [constants.DEFAULT_SHELL_WINDOWS_POWERSHELL, "-NoExit", "-NoLogo", "-NonInteractive", "-Command", f"chcp 65001 | Out-Null; {prompt_cmd}"]
-        self.process = await asyncio.create_subprocess_exec(*shell_cmd_list, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        await self._read_until_prompt(); await self._update_cwd()
-    async def _read_until_prompt(self, stream=None, timeout=2.0):
-        active_stream = stream or self.process.stdout
-        buffer = ""
-        while True:
-            try:
-                char = await asyncio.wait_for(active_stream.read(1), timeout=timeout)
-                if not char: break
-                buffer += char.decode('utf-8', 'replace')
-                if buffer.endswith(PROMPT_MARKER): return buffer[:-len(PROMPT_MARKER)]
-            except asyncio.TimeoutError: break
-            except Exception: break
-        return buffer
-    async def _update_cwd(self):
-        self.process.stdin.write(b"$PWD.Path\n"); await self.process.stdin.drain()
-        output = await self._read_until_prompt(timeout=1.0)
-        lines = [l.strip() for l in output.splitlines() if l.strip()]
-        if lines and lines[0].lower() == '$pwd.path': lines = lines[1:]
-        if lines: self.current_working_directory = lines[-1]
-    async def _get_return_code(self):
-        self.process.stdin.write(b"echo $LASTEXITCODE\n"); await self.process.stdin.drain()
-        output = await self._read_until_prompt(timeout=1.0)
-        lines = [l.strip() for l in output.splitlines() if l.strip()]
-        if lines and lines[0].lower() == 'echo $lastexitcode': lines = lines[1:]
-        try: return int(lines[-1]) if lines else -1
-        except (ValueError, IndexError): return -1
-    async def execute_command(self, command):
-        if not command.strip(): return "", "", await self._get_return_code()
-        self.process.stdin.write(f"{command}\n".encode('utf-8')); await self.process.stdin.drain()
-        # For now, this simple model does not separate stderr for powershell
-        stdout = await self._read_until_prompt(timeout=10.0)
-        lines = stdout.splitlines()
-        if lines and lines[0].strip() == command.strip(): stdout = "\n".join(lines[1:])
-        print(stdout)
-        rc = await self._get_return_code(); await self._update_cwd()
-        return stdout, "", rc
-    async def get_prompt(self):
-        return FormattedText([('class:prompt_symbol_ps', "PS "), ('class:path', self.current_working_directory), ('class:prompt_symbol', "> ")])
+class BashSession(Session):
+    def __init__(self):
+        self.process = None
+        self.username = getpass.getuser()
+        self.hostname = socket.gethostname()
+        self.current_working_directory = "~"
 
-class PosixShellSession(BaseShellSession):
-    def __init__(self, shell_path, shell_name): super().__init__(); self.shell_path = shell_path; self.shell_type = shell_name
-    async def _initialize_shell(self):
-        cmd = [self.shell_path, "-c", f"export PS1='{PROMPT_MARKER}'; exec {self.shell_path} -i"]
-        self.process = await asyncio.create_subprocess_exec(*cmd, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        await self._read_streams_until_prompt(); await self._update_cwd()
+    async def initialize(self):
+        bash_path = shutil.which("bash")
+        if not bash_path:
+            raise FileNotFoundError("bash executable not found.")
 
-    async def _read_streams_until_prompt(self, timeout=2.0):
+        # Start bash in interactive mode and set a unique, simple PS1 prompt
+        cmd = [bash_path, "-c", f"export PS1='{PROMPT_MARKER}'; exec {bash_path} -i"]
+        self.process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        # Consume the initial prompt and messages
+        await self._read_until_prompt()
+        self.current_working_directory = await self._get_cwd()
+
+    async def _read_until_prompt(self) -> tuple[str, str]:
         stdout_buffer = bytearray()
         stderr_buffer = bytearray()
         prompt_marker_bytes = PROMPT_MARKER.encode('utf-8')
 
         tasks = {
-            asyncio.create_task(self.process.stdout.read(4096)): self.process.stdout,
-            asyncio.create_task(self.process.stderr.read(4096)): self.process.stderr
+            asyncio.create_task(self.process.stdout.read(1024)): self.process.stdout,
+            asyncio.create_task(self.process.stderr.read(1024)): self.process.stderr,
         }
 
-        while tasks:
-            done, pending = await asyncio.wait(tasks.keys(), return_when=asyncio.FIRST_COMPLETED, timeout=timeout)
+        output_ended = False
+        while not output_ended:
+            done, pending = await asyncio.wait(tasks.keys(), return_when=asyncio.FIRST_COMPLETED, timeout=5.0)
 
             if not done: # Timeout
-                for task in pending: task.cancel()
                 break
 
             for task in done:
@@ -129,105 +76,81 @@ class PosixShellSession(BaseShellSession):
                     if stream is self.process.stdout:
                         stdout_buffer.extend(data)
                         if prompt_marker_bytes in stdout_buffer:
+                            output_ended = True
+                            # Cancel pending tasks as we've found the end
                             for p_task in pending: p_task.cancel()
-                            tasks.clear()
                             break
                     else: # stderr
                         stderr_buffer.extend(data)
-                        sys.stderr.write(data.decode('utf-8', 'replace')) # Print stderr as it arrives
+                        # Print stderr as it arrives
+                        sys.stderr.write(data.decode('utf-8', 'replace'))
                         sys.stderr.flush()
 
                 except Exception:
-                    continue # Stream might be closed
+                    continue # Ignore errors from closed streams
 
-                if not prompt_found(stdout_buffer, prompt_marker_bytes):
-                     tasks[asyncio.create_task(stream.read(4096))] = stream
+                # Resubmit the read task for the next chunk
+                if not output_ended:
+                    tasks[asyncio.create_task(stream.read(1024))] = stream
 
-        # Final processing of buffer
         stdout_str = stdout_buffer.decode('utf-8', 'replace')
         stderr_str = stderr_buffer.decode('utf-8', 'replace')
 
+        # Clean up the output
         if PROMPT_MARKER in stdout_str:
-            stdout_final = stdout_str.split(PROMPT_MARKER, 1)[0]
-        else:
-            stdout_final = stdout_str
+            stdout_str = stdout_str.split(PROMPT_MARKER, 1)[0]
 
-        return stdout_final, stderr_str
+        return stdout_str, stderr_str
 
-    async def _update_cwd(self):
-        self.process.stdin.write(b"pwd\n"); await self.process.stdin.drain()
-        stdout, _ = await self._read_streams_until_prompt()
-        lines = [l.strip() for l in stdout.splitlines() if l.strip()]
-        if lines and lines[0] == 'pwd': lines = lines[1:]
-        if lines: self.current_working_directory = lines[-1]
-    async def _get_return_code(self):
-        self.process.stdin.write(b"echo $?\n"); await self.process.stdin.drain()
-        stdout, _ = await self._read_streams_until_prompt()
-        lines = [l.strip() for l in stdout.splitlines() if l.strip()]
-        if lines and lines[0] == 'echo $?': lines = lines[1:]
-        try: return int(lines[-1]) if lines else -1
-        except (ValueError, IndexError): return -1
-    async def execute_command(self, command):
-        if not command.strip(): return "", "", await self._get_return_code()
-        self.process.stdin.write(f"{command}\n".encode('utf-8')); await self.process.stdin.drain()
-        stdout, stderr = await self._read_streams_until_prompt(timeout=10.0)
+    async def execute(self, command: str, print_output: bool = True) -> str:
+        if not self.process: raise ConnectionError("Session is not initialized.")
+
+        self.process.stdin.write((command + "\n").encode('utf-8'))
+        await self.process.stdin.drain()
+
+        stdout, stderr = await self._read_until_prompt()
+
+        # Filter out the echoed command from the beginning of the output
+        full_output = stdout
+        lines = full_output.splitlines()
+        if lines and lines[0].strip() == command.strip():
+            full_output = "\n".join(lines[1:])
+
+        if print_output and full_output:
+            print(full_output)
+
+        # Update CWD after command execution for the next prompt
+        self.current_working_directory = await self._get_cwd()
+
+        return stdout + stderr # Return combined output
+
+    async def _get_cwd(self) -> str:
+        # This is a quiet command execution
+        self.process.stdin.write(b"pwd\n")
+        await self.process.stdin.drain()
+        stdout, _ = await self._read_until_prompt()
         lines = stdout.splitlines()
-        if lines and lines[0].strip() == command.strip(): stdout = "\n".join(lines[1:])
-        if stdout: print(stdout)
-        # stderr is already printed in real-time
-        rc = await self._get_return_code(); await self._update_cwd()
-        return stdout, stderr, rc
-    async def get_prompt(self):
-        home = os.path.expanduser("~"); cwd = self.current_working_directory
-        norm_cwd = os.path.normpath(cwd); norm_home = os.path.normpath(home)
-        display_cwd = f"~{os.path.sep}{os.path.relpath(norm_cwd, norm_home)}" if norm_cwd.startswith(norm_home) else norm_cwd
-        display_cwd = display_cwd.replace("\\", "/")
-        return FormattedText([('class:username', self.username), ('class:default', '@'), ('class:hostname', self.hostname), ('class:default', ':'), ('class:path', display_cwd), ('class:prompt_symbol', '$ ')])
+        if lines and lines[0].strip() == "pwd":
+            lines = lines[1:]
+        return lines[-1].strip() if lines else self.current_working_directory
 
-class CmdSession(PosixShellSession): # CMD is very different, this inheritance is problematic
-     def __init__(self): super().__init__(constants.DEFAULT_SHELL_WINDOWS_CMD, "cmd")
-     async def _initialize_shell(self):
-        prompt_cmd = f"prompt {PROMPT_MARKER.replace('>', '$G')}"
-        cmd = [self.shell_path, "/K", f"chcp 65001 & {prompt_cmd}"]
-        self.process = await asyncio.create_subprocess_exec(*cmd, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        await self._read_streams_until_prompt(); await self._update_cwd()
-     async def _update_cwd(self):
-        self.process.stdin.write(b"cd\n"); await self.process.stdin.drain()
-        stdout, _ = await self._read_streams_until_prompt()
-        lines = [l.strip() for l in stdout.splitlines() if l.strip()]
-        if lines and lines[0].lower() == 'cd': lines = lines[1:]
-        if lines: self.current_working_directory = lines[-1]
-     async def _get_return_code(self):
-        self.process.stdin.write(b"echo %errorlevel%\n"); await self.process.stdin.drain()
-        stdout, _ = await self._read_streams_until_prompt()
-        lines = [l.strip() for l in stdout.splitlines() if l.strip()]
-        if lines and lines[0].lower() == 'echo %errorlevel%': lines = lines[1:]
-        try: return int(lines[-1]) if lines else -1
-        except (ValueError, IndexError): return -1
-     async def get_prompt(self):
-        return FormattedText([('class:path', self.current_working_directory), ('class:prompt_symbol', "> ")])
+    async def get_display_prompt(self) -> str:
+        home = os.path.expanduser("~")
+        cwd = self.current_working_directory
+        norm_cwd = os.path.normpath(cwd)
+        norm_home = os.path.normpath(home)
 
-def prompt_found(buffer, marker): return marker in buffer
+        display_cwd = cwd
+        if norm_cwd.startswith(norm_home):
+             display_cwd = "~" + norm_cwd[len(norm_home):].replace("\\", "/")
 
-async def create_shell_session() -> BaseShellSession:
-    session = None
-    if platform.system() == "Windows":
-        try:
-            proc_check = await asyncio.create_subprocess_shell(
-                f"powershell.exe -Command \"Get-Host\"",
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-            await proc_check.communicate()
-            if proc_check.returncode == 0: session = PowerShellSession()
-            else: session = CmdSession()
-        except (FileNotFoundError, Exception): session = CmdSession()
-    else:
-        default_shell = "/bin/bash"
-        env_shell = os.environ.get("SHELL", default_shell)
-        resolved_shell_path = shutil.which(env_shell) or shutil.which(default_shell)
-        if not resolved_shell_path: raise FileNotFoundError("Could not find a valid shell.")
-        session = PosixShellSession(resolved_shell_path, os.path.basename(resolved_shell_path))
+        return f"{self.username}@{self.hostname}:{display_cwd}$ "
 
-    try: await session._initialize_shell(); return session
-    except Exception as e:
-        print(f"[ERROR] Failed to initialize shell session ({getattr(session, 'shell_type', 'unknown')}): {e}")
-        return None
+    async def close(self):
+        if self.process and self.process.returncode is None:
+            try:
+                self.process.stdin.write(b"exit\n")
+                await self.process.stdin.drain()
+                await asyncio.wait_for(self.process.wait(), timeout=1.0)
+            except Exception:
+                self.process.kill()
