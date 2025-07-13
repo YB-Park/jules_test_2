@@ -5,6 +5,8 @@ from typing import Optional
 import time
 import select # For non-blocking I/O on Unix-like systems
 import os # For non-blocking pipe operations
+import platform # To detect OS
+import threading # For Windows streaming
 
 from rich.console import Console
 
@@ -19,6 +21,13 @@ class CommandResult:
     stderr: str
     returncode: int
     error: Optional[Exception] = None
+
+def _read_stream(stream, buffer_list, console_obj, color):
+    """Helper function to read a stream in a separate thread."""
+    for line in iter(stream.readline, ''):
+        decoded_line = line.strip()
+        console_obj.print(f"[{color}]{decoded_line}[/{color}]")
+        buffer_list.append(line)
 
 def execute_command(
     command: str,
@@ -48,85 +57,103 @@ def execute_command(
             shell=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=False, # Read as bytes, then decode
-            encoding=None, # No encoding for Popen, handle manually
+            text=True, # Use text mode for readline
+            encoding='utf-8',
             errors='replace',
-            bufsize=0 # Unbuffered
+            bufsize=1 # Line-buffered
         )
 
-        # Set pipes to non-blocking mode
-        os.set_blocking(process.stdout.fileno(), False)
-        os.set_blocking(process.stderr.fileno(), False)
+        if platform.system() == "Windows":
+            stdout_thread = threading.Thread(
+                target=_read_stream,
+                args=(process.stdout, full_stdout_list, stdout_console, "green")
+            )
+            stderr_thread = threading.Thread(
+                target=_read_stream,
+                args=(process.stderr, full_stderr_list, stderr_console, "red")
+            )
 
-        stdout_buffer = b""
-        stderr_buffer = b""
+            stdout_thread.start()
+            stderr_thread.start()
 
-        # Stream stdout and stderr in real-time using select.select and os.read
-        while True:
-            rlist = []
-            if process.stdout:
-                rlist.append(process.stdout)
-            if process.stderr:
-                rlist.append(process.stderr)
+            # Wait for the process to terminate
+            process.wait()
 
-            # If no more pipes to read from, and process is done, break
-            if not rlist and process.poll() is not None:
-                break
-            
-            # Wait for data to be available on stdout or stderr, with a timeout
-            readable, _, _ = select.select(rlist, [], [], 0.01) # 0.01 second timeout
+            # Ensure all output is read from threads before proceeding
+            stdout_thread.join()
+            stderr_thread.join()
 
-            for fd in readable:
-                if fd == process.stdout:
-                    data = os.read(process.stdout.fileno(), 4096) # Read up to 4KB
-                    if data:
-                        stdout_buffer += data
-                        while b'\n' in stdout_buffer:
-                            line, stdout_buffer = stdout_buffer.split(b'\n', 1)
-                            decoded_line = line.decode('utf-8', errors='replace')
-                            stdout_console.print(f"[green]{decoded_line.strip()}[/green]")
-                            full_stdout_list.append(decoded_line + '\n')
-                elif fd == process.stderr:
-                    data = os.read(process.stderr.fileno(), 4096) # Read up to 4KB
-                    if data:
-                        stderr_buffer += data
-                        while b'\n' in stderr_buffer:
-                            line, stderr_buffer = stderr_buffer.split(b'\n', 1)
-                            decoded_line = line.decode('utf-8', errors='replace')
-                            stderr_console.print(f"[red]{decoded_line.strip()}[/red]")
-                            full_stderr_list.append(decoded_line + '\n')
-            
-            # Check if the process has terminated after attempting to read
-            if process.poll() is not None:
-                # Read any remaining output after the process has terminated
-                # This is crucial to ensure all output is captured, especially if
-                # the process exits quickly after a final burst of output.
-                # Read remaining data from pipes
-                try:
-                    remaining_stdout = os.read(process.stdout.fileno(), 4096)
-                    stdout_buffer += remaining_stdout
-                except BlockingIOError:
-                    pass
-                try:
-                    remaining_stderr = os.read(process.stderr.fileno(), 4096)
-                    stderr_buffer += remaining_stderr
-                except BlockingIOError:
-                    pass
+        else: # Unix-like systems (Linux, macOS)
+            # Set pipes to non-blocking mode
+            os.set_blocking(process.stdout.fileno(), False)
+            os.set_blocking(process.stderr.fileno(), False)
 
-                # Process any remaining buffered data (without splitting by newline)
-                if stdout_buffer:
-                    decoded_data = stdout_buffer.decode('utf-8', errors='replace')
-                    stdout_console.print(f"[green]{decoded_data.strip()}[/green]")
-                    full_stdout_list.append(decoded_data)
-                if stderr_buffer:
-                    decoded_data = stderr_buffer.decode('utf-8', errors='replace')
-                    stderr_console.print(f"[red]{decoded_data.strip()}[/red]")
-                    full_stderr_list.append(decoded_data)
+            stdout_buffer = b""
+            stderr_buffer = b""
 
-                # Explicitly close pipes
-                process.stdout.close()
-                process.stderr.close()
-                break # Exit the loop after processing remaining output
+            # Stream stdout and stderr in real-time using select.select and os.read
+            while True:
+                rlist = []
+                if process.stdout:
+                    rlist.append(process.stdout)
+                if process.stderr:
+                    rlist.append(process.stderr)
+
+                # If no more pipes to read from, and process is done, break
+                if not rlist and process.poll() is not None:
+                    break
+                
+                # Wait for data to be available on stdout or stderr, with a timeout
+                readable, _, _ = select.select(rlist, [], [], 0.01) # 0.01 second timeout
+
+                for fd in readable:
+                    if fd == process.stdout:
+                        data = os.read(process.stdout.fileno(), 4096) # Read up to 4KB
+                        if data:
+                            stdout_buffer += data
+                            while b'\n' in stdout_buffer:
+                                line, stdout_buffer = stdout_buffer.split(b'\n', 1)
+                                decoded_line = line.decode('utf-8', errors='replace')
+                                stdout_console.print(f"[green]{decoded_line.strip()}[/green]")
+                                full_stdout_list.append(decoded_line + '\n')
+                    elif fd == process.stderr:
+                        data = os.read(process.stderr.fileno(), 4096) # Read up to 4KB
+                        if data:
+                            stderr_buffer += data
+                            while b'\n' in stderr_buffer:
+                                line, stderr_buffer = stderr_buffer.split(b'\n', 1)
+                                decoded_line = line.decode('utf-8', errors='replace')
+                                stderr_console.print(f"[red]{decoded_line.strip()}[/red]")
+                                full_stderr_list.append(decoded_line + '\n')
+                
+                # Check if the process has terminated after attempting to read
+                if process.poll() is not None:
+                    # Read any remaining output after the process has terminated
+                    try:
+                        remaining_stdout = os.read(process.stdout.fileno(), 4096)
+                        stdout_buffer += remaining_stdout
+                    except BlockingIOError:
+                        pass
+                    try:
+                        remaining_stderr = os.read(process.stderr.fileno(), 4096)
+                        stderr_buffer += remaining_stderr
+                    except BlockingIOError:
+                        pass
+
+                    # Process any remaining buffered data (without splitting by newline)
+                    if stdout_buffer:
+                        decoded_data = stdout_buffer.decode('utf-8', errors='replace')
+                        stdout_console.print(f"[green]{decoded_data.strip()}[/green]")
+                        full_stdout_list.append(decoded_data)
+                    if stderr_buffer:
+                        decoded_data = stderr_buffer.decode('utf-8', errors='replace')
+                        stderr_console.print(f"[red]{decoded_data.strip()}[/red]")
+                        full_stderr_list.append(decoded_data)
+
+                    # Explicitly close pipes
+                    process.stdout.close()
+                    process.stderr.close()
+                    break # Exit the loop after processing remaining output
 
         returncode = process.returncode
 
@@ -141,7 +168,7 @@ def execute_command(
         stderr_console.print(f"[bold red]{error_message}[/bold red]")
         return CommandResult(
             command=command,
-            stdout="".join(full_stdout_list).strip(),
+            stdout="".join(full_stdout_list),
             stderr=error_message,
             returncode=-1,
             error=e
