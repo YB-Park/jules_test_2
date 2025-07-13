@@ -11,6 +11,7 @@ import io # For TextIOWrapper
 import locale # To get preferred encoding
 
 from rich.console import Console
+from rich.live import Live # For typing effect
 
 console = Console()
 error_console = Console(file=sys.stderr)
@@ -58,7 +59,24 @@ def execute_command(
     Returns:
         A CommandResult object containing the execution details.
     """
-    stdout_console.print(f"[bold blue]> {command}[/bold blue]")
+    prompt_prefix = "[bold blue]>"
+    prompt_postfix = "[/bold blue]"
+
+    with Live(console=stdout_console, screen=False, refresh_per_second=60) as live:
+        typed_text = ""
+
+        typed_text += prompt_prefix
+        live.update(typed_text)
+
+        for char in command:
+            typed_text += char
+            live.update(typed_text)
+            time.sleep(0.02) # Small delay for typing effect
+
+        typed_text += prompt_postfix
+        live.update(typed_text)
+
+    stdout_console.print("") # Add an empty line after the command display
 
     full_stdout_list = []
     full_stderr_list = []
