@@ -22,12 +22,28 @@ class CommandResult:
     returncode: int
     error: Optional[Exception] = None
 
-def _read_stream(stream, buffer_list, console_obj, color):
-    """Helper function to read a stream in a separate thread."""
-    for line in iter(stream.readline, ''):
-        decoded_line = line.strip()
-        console_obj.print(f"[{color}]{decoded_line}[/{color}]")
-        buffer_list.append(line)
+def _read_stream_bytes(stream, buffer_list, console_obj, color):
+    """Helper function to read a stream as bytes in a separate thread and decode."""
+    buffer = b''
+    while True:
+        try:
+            chunk = stream.read(4096) # Read bytes
+            if not chunk:
+                # Stream closed, process any remaining buffer
+                if buffer:
+                    decoded_line = buffer.decode('utf-8', errors='replace')
+                    console_obj.print(f"[{color}]{decoded_line.strip()}[/{color}]")
+                    buffer_list.append(decoded_line)
+                break
+            buffer += chunk
+            while b'\n' in buffer:
+                line_bytes, buffer = buffer.split(b'\n', 1)
+                decoded_line = line_bytes.decode('utf-8', errors='replace')
+                console_obj.print(f"[{color}]{decoded_line.strip()}[/{color}]")
+                buffer_list.append(decoded_line + '\n') # Append with newline for full_stdout_list
+        except Exception as e:
+            # Handle potential errors during read, e.g., stream closed
+            break
 
 def execute_command(
     command: str,
@@ -52,24 +68,24 @@ def execute_command(
     full_stderr_list = []
 
     try:
-        process = subprocess.Popen(
-            command,
-            shell=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True, # Use text mode for readline
-            encoding='utf-8',
-            errors='replace',
-            bufsize=1 # Line-buffered
-        )
-
         if platform.system() == "Windows":
+            process = subprocess.Popen(
+                command,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=False, # Read as bytes
+                encoding=None, # No encoding for Popen
+                errors='replace',
+                bufsize=0 # Unbuffered
+            )
+
             stdout_thread = threading.Thread(
-                target=_read_stream,
+                target=_read_stream_bytes,
                 args=(process.stdout, full_stdout_list, stdout_console, "green")
             )
             stderr_thread = threading.Thread(
-                target=_read_stream,
+                target=_read_stream_bytes,
                 args=(process.stderr, full_stderr_list, stderr_console, "red")
             )
 
@@ -83,7 +99,22 @@ def execute_command(
             stdout_thread.join()
             stderr_thread.join()
 
+            # Ensure pipes are closed after threads are done
+            process.stdout.close()
+            process.stderr.close()
+
         else: # Unix-like systems (Linux, macOS)
+            process = subprocess.Popen(
+                command,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=False, # Read as bytes, then decode
+                encoding=None, # No encoding for Popen, handle manually
+                errors='replace',
+                bufsize=0 # Unbuffered
+            )
+
             # Set pipes to non-blocking mode
             os.set_blocking(process.stdout.fileno(), False)
             os.set_blocking(process.stderr.fileno(), False)
@@ -129,6 +160,9 @@ def execute_command(
                 # Check if the process has terminated after attempting to read
                 if process.poll() is not None:
                     # Read any remaining output after the process has terminated
+                    # This is crucial to ensure all output is captured, especially if
+                    # the process exits quickly after a final burst of output.
+                    # Read remaining data from pipes
                     try:
                         remaining_stdout = os.read(process.stdout.fileno(), 4096)
                         stdout_buffer += remaining_stdout
