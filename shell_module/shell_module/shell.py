@@ -8,6 +8,7 @@ import os # For non-blocking pipe operations
 import platform # To detect OS
 import threading # For Windows streaming
 import io # For TextIOWrapper
+import locale # To get preferred encoding
 
 from rich.console import Console
 
@@ -25,8 +26,16 @@ class CommandResult:
 
 def _read_stream_text(stream, buffer_list, console_obj, color):
     """Helper function to read a stream as text in a separate thread."""
+    # Determine encoding based on OS
+    if platform.system() == "Windows":
+        # Use locale's preferred encoding for Windows console output
+        # This is often CP949 for Korean Windows systems
+        encoding = locale.getpreferredencoding(False)
+    else:
+        encoding = 'utf-8'
+
     # Wrap the byte stream in a TextIOWrapper for line-by-line reading with encoding
-    text_stream = io.TextIOWrapper(stream.buffer, encoding='utf-8', errors='replace', newline='\n')
+    text_stream = io.TextIOWrapper(stream.buffer, encoding=encoding, errors='replace', newline='\n')
     for line in iter(text_stream.readline, ''):
         decoded_line = line.strip()
         console_obj.print(f"[{color}]{decoded_line}[/{color}]")
