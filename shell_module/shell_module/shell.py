@@ -7,6 +7,7 @@ import select # For non-blocking I/O on Unix-like systems
 import os # For non-blocking pipe operations
 import platform # To detect OS
 import threading # For Windows streaming
+import io # For TextIOWrapper
 
 from rich.console import Console
 
@@ -22,28 +23,14 @@ class CommandResult:
     returncode: int
     error: Optional[Exception] = None
 
-def _read_stream_bytes(stream, buffer_list, console_obj, color):
-    """Helper function to read a stream as bytes in a separate thread and decode."""
-    buffer = b''
-    while True:
-        try:
-            chunk = stream.read(4096) # Read bytes
-            if not chunk:
-                # Stream closed, process any remaining buffer
-                if buffer:
-                    decoded_line = buffer.decode('utf-8', errors='replace')
-                    console_obj.print(f"[{color}]{decoded_line.strip()}[/{color}]")
-                    buffer_list.append(decoded_line)
-                break
-            buffer += chunk
-            while b'\n' in buffer:
-                line_bytes, buffer = buffer.split(b'\n', 1)
-                decoded_line = line_bytes.decode('utf-8', errors='replace')
-                console_obj.print(f"[{color}]{decoded_line.strip()}[/{color}]")
-                buffer_list.append(decoded_line + '\n') # Append with newline for full_stdout_list
-        except Exception as e:
-            # Handle potential errors during read, e.g., stream closed
-            break
+def _read_stream_text(stream, buffer_list, console_obj, color):
+    """Helper function to read a stream as text in a separate thread."""
+    # Wrap the byte stream in a TextIOWrapper for line-by-line reading with encoding
+    text_stream = io.TextIOWrapper(stream.buffer, encoding='utf-8', errors='replace', newline='\n')
+    for line in iter(text_stream.readline, ''):
+        decoded_line = line.strip()
+        console_obj.print(f"[{color}]{decoded_line}[/{color}]")
+        buffer_list.append(line) # Append original line with newline for full_stdout_list
 
 def execute_command(
     command: str,
@@ -81,11 +68,11 @@ def execute_command(
             )
 
             stdout_thread = threading.Thread(
-                target=_read_stream_bytes,
+                target=_read_stream_text,
                 args=(process.stdout, full_stdout_list, stdout_console, "green")
             )
             stderr_thread = threading.Thread(
-                target=_read_stream_bytes,
+                target=_read_stream_text,
                 args=(process.stderr, full_stderr_list, stderr_console, "red")
             )
 
