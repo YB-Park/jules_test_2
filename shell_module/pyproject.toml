@@ -1,0 +1,14 @@
+[tool.poetry]
+name = "shell-module"
+version = "0.1.0"
+description = "A module to execute shell commands and capture the output."
+authors = ["Your Name <you@example.com>"]
+
+[tool.poetry.dependencies]
+python = "^3.8"
+prompt-toolkit = "^3.0"
+rich = "^13.7.0"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
