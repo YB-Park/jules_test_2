@@ -80,9 +80,15 @@ class Shell:
         full_stderr_list = []
 
         try:
-            # Command to get the current directory after execution
+            # Marker to separate command output from CWD
+            marker = "END_OF_COMMAND_OUTPUT_MARKER"
             get_cwd_command = 'cd' if platform.system() == "Windows" else 'pwd'
-            full_command = f"{command} && {get_cwd_command}"
+
+            # Construct the full command with the marker
+            if platform.system() == "Windows":
+                full_command = f"{command} & echo {marker} & {get_cwd_command}"
+            else:
+                full_command = f"{command}; echo {marker}; {get_cwd_command}"
 
             if platform.system() == "Windows":
                 process = subprocess.Popen(
@@ -182,15 +188,18 @@ class Shell:
             returncode = process.returncode
             stdout_str = "".join(full_stdout_list)
 
-            # Extract the new CWD from the last line of stdout
-            lines = stdout_str.strip().split('\n')
-            if lines and returncode == 0:
-                new_cwd = lines[-1].strip()
+            # Split the output by the marker
+            if marker in stdout_str:
+                command_output, cwd_output = stdout_str.split(marker, 1)
+
+                # The new CWD is the last line of the remaining output
+                new_cwd = cwd_output.strip().split('\n')[-1].strip()
+
                 if os.path.isdir(new_cwd):
                     self.cwd = new_cwd
-                    # Remove the CWD from the stdout that is returned
-                    stdout_str = "\n".join(lines[:-1])
 
+                # The actual stdout is everything before the marker
+                stdout_str = command_output.strip()
 
             return CommandResult(
                 command=command,
