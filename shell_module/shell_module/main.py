@@ -1,24 +1,26 @@
 import asyncio
 
 from prompt_toolkit import PromptSession
-from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.keys import Keys
 from rich.console import Console
 
-from shell_module.shell import execute_command
+from shell_module.shell import Shell
 
 console = Console()
+
 
 async def interactive_shell():
     """
     An interactive shell using prompt_toolkit for a better user experience.
     """
     session = PromptSession()
+    shell = Shell()
     console.print("[bold green]Interactive Shell.[/bold green] Type 'exit' or press Ctrl+D to quit.")
 
     while True:
         try:
-            command_input = await session.prompt_async("[bold yellow]>> [/bold yellow]")
+            # Display the current working directory in the prompt
+            prompt_text = f"[bold yellow]({shell.cwd})[/bold yellow] [bold yellow]>> [/bold yellow]"
+            command_input = await session.prompt_async(prompt_text, refresh_interval=0.5)
             command_input = command_input.strip()
 
             if not command_input:
@@ -26,7 +28,7 @@ async def interactive_shell():
             if command_input.lower() == 'exit':
                 break
 
-            execute_command(command_input)
+            shell.execute_command(command_input)
 
         except (EOFError, KeyboardInterrupt):
             break
